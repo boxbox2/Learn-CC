@@ -1,0 +1,38 @@
+active: openai
+providers:
+  openai:
+    protocol: openai
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+
+  claude:
+    protocol: anthropic
+    model: claude-sonnet-4-5
+    base_url: https://api.anthropic.com
+    api_key: ${ANTHROPIC_API_KEY}
+    thinking:
+      enabled: true
+      budget_tokens: 1024
+      show_by_default: false
+
+  deepseek:
+    protocol: openai
+    model: deepseek-chat
+    base_url: https://api.deepseek.com
+    api_key: ${DEEPSEEK_API_KEY}
+    thinking:
+      enabled: true
+      show_by_default: false
+
+  kimi:
+    protocol: openai
+    model: kimi-k2.6
+    base_url: https://api.moonshot.cn/v1
+    api_key: ${KIMI_API_KEY}
+
+  ark:
+    protocol: openai
+    model: doubao-1-5-pro-32k-250115
+    base_url: https://ark.cn-beijing.volces.com/api/v3
+    api_key: ${ARK_API_KEY}

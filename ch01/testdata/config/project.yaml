@@ -1,0 +1,7 @@
+active: deepseek
+providers:
+  deepseek:
+    model: deepseek-reasoner
+    thinking:
+      enabled: true
+      show_by_default: false

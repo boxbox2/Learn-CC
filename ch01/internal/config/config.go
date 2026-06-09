@@ -1,0 +1,93 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+)
+
+const (
+	ProtocolOpenAI    = "openai"
+	ProtocolAnthropic = "anthropic"
+)
+
+type AppConfig struct {
+	Active    string                    `yaml:"active"`
+	Providers map[string]ProviderConfig `yaml:"providers"`
+}
+
+type ProviderConfig struct {
+	Protocol string         `yaml:"protocol"`
+	Model    string         `yaml:"model"`
+	BaseURL  string         `yaml:"base_url"`
+	APIKey   string         `yaml:"api_key"`
+	Thinking ThinkingConfig `yaml:"thinking"`
+}
+
+type ThinkingConfig struct {
+	Enabled       bool `yaml:"enabled"`
+	BudgetTokens  int  `yaml:"budget_tokens"`
+	ShowByDefault bool `yaml:"show_by_default"`
+}
+
+func (c AppConfig) ActiveProvider() (ProviderConfig, error) {
+	if strings.TrimSpace(c.Active) == "" {
+		return ProviderConfig{}, fmt.Errorf("active provider is required")
+	}
+	cfg, ok := c.Providers[c.Active]
+	if !ok {
+		return ProviderConfig{}, fmt.Errorf("active provider %q does not exist; available providers: %s", c.Active, strings.Join(c.ProviderNames(), ", "))
+	}
+	return cfg, nil
+}
+
+func (c AppConfig) ProviderNames() []string {
+	names := make([]string, 0, len(c.Providers))
+	for name := range c.Providers {
+		names = append(names, name)
+	}
+	return names
+}
+
+func Validate(cfg AppConfig) error {
+	if len(cfg.Providers) == 0 {
+		return fmt.Errorf("providers must contain at least one provider")
+	}
+	if strings.TrimSpace(cfg.Active) == "" {
+		return fmt.Errorf("active provider is required")
+	}
+	if _, ok := cfg.Providers[cfg.Active]; !ok {
+		return fmt.Errorf("active provider %q does not exist; available providers: %s", cfg.Active, strings.Join(cfg.ProviderNames(), ", "))
+	}
+	for name, provider := range cfg.Providers {
+		if err := validateProvider(name, provider); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProvider(name string, provider ProviderConfig) error {
+	if strings.TrimSpace(provider.Protocol) == "" {
+		return fmt.Errorf("provider %q protocol is required", name)
+	}
+	switch provider.Protocol {
+	case ProtocolOpenAI, ProtocolAnthropic:
+	default:
+		return fmt.Errorf("provider %q protocol %q is not supported; expected openai or anthropic", name, provider.Protocol)
+	}
+	if strings.TrimSpace(provider.Model) == "" {
+		return fmt.Errorf("provider %q model is required", name)
+	}
+	if strings.TrimSpace(provider.BaseURL) == "" {
+		return fmt.Errorf("provider %q base_url is required", name)
+	}
+	if strings.TrimSpace(provider.APIKey) == "" {
+		return fmt.Errorf("provider %q api_key is required", name)
+	}
+	if provider.Protocol == ProtocolAnthropic && provider.Thinking.Enabled {
+		if provider.Thinking.BudgetTokens > 0 && provider.Thinking.BudgetTokens < 1024 {
+			return fmt.Errorf("provider %q thinking budget_tokens must be at least 1024 when set", name)
+		}
+	}
+	return nil
+}
