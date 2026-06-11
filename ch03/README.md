@@ -32,6 +32,21 @@ ch03:
 
 ch02 的关键边界是“最多一次工具回合”。ch03 的关键边界则变成“允许模型自主多步执行，但必须把循环、工具、事件、UI 和资源预算全部显式收口”。
 
+## 代码落点
+
+ch03 保留 ch02 的 Provider、工具层和 TUI 基础能力，在此之上新增 `internal/agent` 作为 Agent Runtime：
+
+| 文件 | 职责 |
+| --- | --- |
+| `internal/agent/runner.go` | 多轮 Agent Loop 主循环，负责模型调用、工具回灌和停止原因 |
+| `internal/agent/collector.go` | 收集单轮 Provider 流，累计文本、工具调用和 usage，并转发运行事件 |
+| `internal/agent/tools.go` | 工具批次规划、只读工具并行执行、结果稳定排序和回灌截断 |
+| `internal/agent/agent_test.go` | 覆盖流收集、多轮循环、未知工具停止和工具批次规划 |
+| `internal/provider/event.go` | 在 ch02 事件基础上扩展 progress 等运行期事件 |
+| `internal/tool/*` | 继续提供路径、Limits、Edit 防误改和 Bash 进程清理等硬边界 |
+
+这意味着 ch03 不是重写 ch02，而是把 ch02 的“一次工具回合”提升到可循环、可观测、可测试的 Agent Runner。
+
 ## 为什么 ch03 不是 ch02 的简单循环
 
 ch02 的事件链路大致是：
