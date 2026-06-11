@@ -26,4 +26,5 @@ spec.md -> plan.md -> task.md -> checklist.md
 | --- | --- | --- |
 | [ch01](./ch01) | 单轮/多轮聊天客户端基础链路 | 打通配置加载、Provider 抽象、OpenAI-compatible / Anthropic 流式响应、thinking 展示和 Bubble Tea TUI。 |
 | [ch02](./ch02) | 工具系统与 Agent 雏形 | 新增统一工具层，支持 Read、Write、Edit、Bash、Glob、Grep，并完成单轮工具调用、结果回灌和 Agent Loop 阻断。 |
+| [ch03](./ch03) | Agent Loop、AgentEvent 与多轮工具编排 | 从单轮工具闭环升级为多轮自主执行，重点讨论 Plan 模式、并行工具、AgentEvent 事件流以及 UI 联动。 |
 
