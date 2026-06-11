@@ -20,3 +20,10 @@ spec.md -> plan.md -> task.md -> checklist.md
 
 如果你想基于本项目继续开发，请先根据你的简要需求与模型沟通，之后拉紧边界明确需求。
 
+## 章节
+
+| 章节 | 主题 | 说明 |
+| --- | --- | --- |
+| [ch01](./ch01) | 单轮/多轮聊天客户端基础链路 | 打通配置加载、Provider 抽象、OpenAI-compatible / Anthropic 流式响应、thinking 展示和 Bubble Tea TUI。 |
+| [ch02](./ch02) | 工具系统与 Agent 雏形 | 新增统一工具层，支持 Read、Write、Edit、Bash、Glob、Grep，并完成单轮工具调用、结果回灌和 Agent Loop 阻断。 |
+

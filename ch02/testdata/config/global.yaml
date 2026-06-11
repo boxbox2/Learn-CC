@@ -1,0 +1,12 @@
+active: openai
+providers:
+  openai:
+    protocol: openai
+    model: gpt-global
+    base_url: https://api.openai.com/v1
+    api_key: sk-test-global
+  deepseek:
+    protocol: openai
+    model: deepseek-chat
+    base_url: https://api.deepseek.com
+    api_key: sk-test-deepseek
