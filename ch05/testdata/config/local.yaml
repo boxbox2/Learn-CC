@@ -1,0 +1,5 @@
+permissions:
+  mode: acceptEdits
+  rules:
+    - action: deny
+      pattern: Bash(rm *)

@@ -1,0 +1,11 @@
+active: deepseek
+permissions:
+  rules:
+    - action: allow
+      pattern: Bash(go test *)
+providers:
+  deepseek:
+    model: deepseek-reasoner
+    thinking:
+      enabled: true
+      show_by_default: false
