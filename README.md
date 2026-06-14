@@ -29,3 +29,4 @@ spec.md -> plan.md -> task.md -> checklist.md
 | [ch03](./ch03) | Agent Loop、AgentEvent 与多轮工具编排 | 从单轮工具闭环升级为多轮自主执行，重点讨论 Plan 模式、并行工具、AgentEvent 事件流以及 UI 联动。 |
 | [ch04](./ch04) | 工具权限与安全沙箱 | 为 Agent Runtime 接入五层权限系统，覆盖危险命令硬拦截、符号链接路径沙箱、可配置规则、权限模式和 TUI 人在回路确认。 |
 | [ch05](./ch05) | MCP Client 与延迟工具发现 | 接入外部 MCP Server，支持 stdio / Streamable HTTP、JSON-RPC 会话、工具发现、ToolSearch 延迟 schema 和多 Server 生命周期管理。 |
+| [ch06](./ch06) | 上下文管理与长会话压缩 | 引入工具结果落盘、稳定预览体、LLM 结构化摘要、恢复段、`/compact` 手动入口和 `prompt_too_long` 紧急压缩重试。 |
