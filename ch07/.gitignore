@@ -1,0 +1,19 @@
+# Local secrets and machine-specific config
+/mewcode.yaml
+/mewcode.local.yaml
+.env
+.env.*
+
+# Build and test output
+/mewcode.exe
+/mewcode
+*.test
+coverage.out
+/dist/
+/bin/
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

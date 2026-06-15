@@ -30,3 +30,4 @@ spec.md -> plan.md -> task.md -> checklist.md
 | [ch04](./ch04) | 工具权限与安全沙箱 | 为 Agent Runtime 接入五层权限系统，覆盖危险命令硬拦截、符号链接路径沙箱、可配置规则、权限模式和 TUI 人在回路确认。 |
 | [ch05](./ch05) | MCP Client 与延迟工具发现 | 接入外部 MCP Server，支持 stdio / Streamable HTTP、JSON-RPC 会话、工具发现、ToolSearch 延迟 schema 和多 Server 生命周期管理。 |
 | [ch06](./ch06) | 上下文管理与长会话压缩 | 引入工具结果落盘、稳定预览体、LLM 结构化摘要、恢复段、`/compact` 手动入口和 `prompt_too_long` 紧急压缩重试。 |
+| [ch07](./ch07) | 启动恢复、长期记忆与内置命令框架 | 接入指令恢复、JSONL 会话存档、异步长期记忆，并新增零参数斜杠命令注册中心、TUI 分流、补全菜单和安全退出。 |
