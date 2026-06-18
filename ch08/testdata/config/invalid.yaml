@@ -1,0 +1,7 @@
+active: bad
+providers:
+  bad:
+    protocol: deepseek
+    model: bad-model
+    base_url: https://example.com
+    api_key: sk-test-secret-value

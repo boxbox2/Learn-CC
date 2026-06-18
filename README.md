@@ -31,3 +31,4 @@ spec.md -> plan.md -> task.md -> checklist.md
 | [ch05](./ch05) | MCP Client 与延迟工具发现 | 接入外部 MCP Server，支持 stdio / Streamable HTTP、JSON-RPC 会话、工具发现、ToolSearch 延迟 schema 和多 Server 生命周期管理。 |
 | [ch06](./ch06) | 上下文管理与长会话压缩 | 引入工具结果落盘、稳定预览体、LLM 结构化摘要、恢复段、`/compact` 手动入口和 `prompt_too_long` 紧急压缩重试。 |
 | [ch07](./ch07) | 启动恢复、长期记忆与内置命令框架 | 接入指令恢复、JSONL 会话存档、异步长期记忆，并新增零参数斜杠命令注册中心、TUI 分流、补全菜单和安全退出。 |
+| [ch08](./ch08) | Skill 技能包系统与两阶段加载 | 将可复用 AI 操作封装为本地 Skill，支持 catalog 注入、LoadSkill 激活、会话级专属工具 overlay、inline/fork 执行模式和 `/skill` 列表命令。 |

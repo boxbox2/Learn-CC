@@ -1,0 +1,390 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"mewcode/internal/config"
+	"mewcode/internal/contextmgr"
+	"mewcode/internal/permission"
+	"mewcode/internal/prompt"
+	"mewcode/internal/provider"
+	"mewcode/internal/tool"
+)
+
+type RunMode string
+
+const (
+	RunModeExecute RunMode = "execute"
+	RunModePlan    RunMode = "plan"
+)
+
+type Options struct {
+	MaxIterations         int
+	MaxConsecutiveUnknown int
+}
+
+type Runner struct {
+	Provider          provider.Provider
+	Config            config.ProviderConfig
+	Tools             *tool.Registry
+	WorkDir           string
+	Limits            tool.Limits
+	Paths             tool.PathPolicy
+	Options           Options
+	Authorizer        permission.Authorizer
+	PermissionManager *permission.Manager
+	ContextManager    *contextmgr.Manager
+	PromptContext     PromptContextProvider
+	Recorder          Recorder
+}
+
+type PromptContextProvider interface {
+	CustomInstructions(ctx context.Context) string
+	LongTermMemory(ctx context.Context) string
+}
+
+type Recorder interface {
+	Append(provider.ChatMessage) error
+}
+
+type RunRequest struct {
+	Messages    []provider.ChatMessage
+	Mode        RunMode
+	Tools       ToolSet
+	PlanContext string
+	Model       string
+}
+
+type Run struct {
+	Events <-chan provider.StreamEvent
+	Done   <-chan Result
+}
+
+type Result struct {
+	Messages []provider.ChatMessage
+	Text     string
+	Usage    provider.Usage
+	Stop     StopReason
+	Err      error
+}
+
+func (r *Runner) Run(ctx context.Context, req RunRequest) (*Run, error) {
+	if r.Provider == nil {
+		return nil, fmt.Errorf("provider is required")
+	}
+	out := make(chan provider.StreamEvent)
+	done := make(chan Result, 1)
+	go func() {
+		defer close(out)
+		defer close(done)
+		done <- r.run(ctx, req, out)
+	}()
+	return &Run{Events: out, Done: done}, nil
+}
+
+func (r *Runner) run(ctx context.Context, req RunRequest, out chan<- provider.StreamEvent) Result {
+	options := r.options()
+	limits := r.Limits
+	if limits == (tool.Limits{}) {
+		limits = tool.DefaultLimits()
+	}
+	paths := r.Paths
+	if paths.Root == "" {
+		paths.Root = r.WorkDir
+	}
+	toolSet := req.Tools
+	if toolSet.Mode == "" {
+		toolSet.Mode = ToolSetAll
+	}
+	messages := append([]provider.ChatMessage(nil), req.Messages...)
+	collector := &StreamCollector{}
+	unknownStreak := 0
+
+	for iteration := 1; iteration <= options.MaxIterations; iteration++ {
+		if ctx.Err() != nil {
+			out <- provider.StreamEvent{Type: provider.StreamEventTypeCancelled}
+			return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopCancelled, Err: ctx.Err()}
+		}
+		out <- progressEvent("model_call", iteration, options.MaxIterations, "calling model")
+		allowedTools := AllowedDefinitions(r.Tools, toolSet)
+		deferredToolNames := DeferredToolNames(r.Tools, toolSet)
+		if r.ContextManager != nil {
+			managed, err := r.ContextManager.ManageBeforeRequest(ctx, contextmgr.ManageRequest{
+				Messages:     messages,
+				AllowedTools: allowedTools,
+				Mode:         contextmgr.ManageModeAuto,
+			})
+			if err != nil {
+				out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+				return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopStreamError, Err: err}
+			}
+			messages = managed.Messages
+			if managed.OffloadReport.Replaced > 0 || managed.Compacted {
+				out <- contextEvent(managed)
+			}
+		}
+		round, updatedMessages, err := r.callModelWithEmergencyRetry(ctx, req, messages, allowedTools, deferredToolNames, iteration, options.MaxIterations, collector, out)
+		messages = updatedMessages
+		if round.Stop == StopCancelled {
+			return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopCancelled, Err: err}
+		}
+		if err != nil {
+			return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopStreamError, Err: err}
+		}
+		if len(round.ToolCalls) == 0 {
+			if strings.TrimSpace(round.Text) != "" {
+				msg := provider.ChatMessage{Role: provider.RoleAssistant, Content: round.Text}
+				messages = append(messages, msg)
+				if err := r.record(msg); err != nil {
+					out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+					return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopStreamError, Err: err}
+				}
+			}
+			if r.ContextManager != nil {
+				r.ContextManager.RecordUsage(round.Usage, len(messages))
+			}
+			out <- progressEvent("final", iteration, options.MaxIterations, "final answer")
+			out <- provider.StreamEvent{Type: provider.StreamEventTypeDone}
+			return Result{Messages: messages, Text: round.Text, Usage: collector.TotalUsage, Stop: StopFinal}
+		}
+
+		assistantMsg := provider.ChatMessage{
+			Role:      provider.RoleAssistant,
+			Content:   round.Text,
+			ToolCalls: append([]provider.ToolCall(nil), round.ToolCalls...),
+		}
+		messages = append(messages, assistantMsg)
+		if err := r.record(assistantMsg); err != nil {
+			out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+			return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopStreamError, Err: err}
+		}
+		if r.ContextManager != nil {
+			r.ContextManager.RecordUsage(round.Usage, len(messages))
+		}
+		out <- progressEvent("tool_execution", iteration, options.MaxIterations, "executing tools")
+		executor := ToolExecutor{
+			Registry:   r.Tools,
+			Overlay:    toolSet.Overlay,
+			Names:      toolSet.Names,
+			WorkingDir: r.WorkDir,
+			PathPolicy: paths,
+			Limits:     limits,
+			Authorizer: r.authorizer(out),
+		}
+		results := executor.ExecuteToolBatches(ctx, round.ToolCalls, out)
+		if r.ContextManager != nil {
+			r.ContextManager.ObserveToolResults(results)
+		}
+		resultMessages := make([]provider.ToolResultMessage, 0, len(results))
+		for _, result := range results {
+			resultMessages = append(resultMessages, provider.ToolResultMessage{
+				ID:      result.CallID,
+				Name:    result.Tool,
+				Content: ToolResultContent(result, limits),
+			})
+		}
+		toolMsg := provider.ChatMessage{Role: provider.RoleUser, ToolResults: resultMessages}
+		messages = append(messages, toolMsg)
+		if err := r.record(toolMsg); err != nil {
+			out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+			return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopStreamError, Err: err}
+		}
+		if allResultsUnknown(results) {
+			unknownStreak++
+		} else {
+			unknownStreak = 0
+		}
+		if unknownStreak >= options.MaxConsecutiveUnknown {
+			err := fmt.Errorf("stopped after %d consecutive unknown tool rounds", unknownStreak)
+			out <- progressEvent("stop", iteration, options.MaxIterations, "unknown tool limit reached")
+			out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+			return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopUnknownToolLimit, Err: err}
+		}
+	}
+	err := fmt.Errorf("stopped after %d iterations", options.MaxIterations)
+	out <- progressEvent("stop", options.MaxIterations, options.MaxIterations, "iteration limit reached")
+	out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+	return Result{Messages: messages, Usage: collector.TotalUsage, Stop: StopMaxIterations, Err: err}
+}
+
+func (r *Runner) record(msg provider.ChatMessage) error {
+	if r.Recorder == nil {
+		return nil
+	}
+	return r.Recorder.Append(msg)
+}
+
+func (r *Runner) authorizer(out chan<- provider.StreamEvent) permission.Authorizer {
+	if r.PermissionManager != nil {
+		return r.PermissionManager.WithPrompter(eventPrompter{out: out})
+	}
+	return r.Authorizer
+}
+
+type eventPrompter struct {
+	out chan<- provider.StreamEvent
+}
+
+type skillPromptContext interface {
+	SkillsCatalog(ctx context.Context) string
+	ActiveSkills(ctx context.Context) string
+}
+
+func (p eventPrompter) Confirm(ctx context.Context, prompt permission.Prompt) permission.UserGrant {
+	if prompt.Response == nil {
+		prompt.Response = make(chan permission.UserGrant, 1)
+	}
+	if p.out == nil {
+		return permission.GrantDeny
+	}
+	select {
+	case p.out <- provider.StreamEvent{Type: provider.StreamEventTypePermissionRequest, Permission: &prompt}:
+	case <-ctx.Done():
+		return permission.GrantDeny
+	}
+	select {
+	case grant := <-prompt.Response:
+		return grant
+	case <-ctx.Done():
+		return permission.GrantDeny
+	}
+}
+
+func (r *Runner) dynamicContext(req RunRequest, defs []tool.Definition, deferredToolNames []string, iteration int) prompt.DynamicContext {
+	mode := string(req.Mode)
+	if mode == "" {
+		mode = prompt.ModeExecute
+	}
+	workDir := r.WorkDir
+	if workDir == "" {
+		workDir = r.Paths.Root
+	}
+	return prompt.DynamicContext{
+		WorkDir:           workDir,
+		Mode:              mode,
+		Iteration:         iteration,
+		ToolSummary:       toolSummary(defs),
+		DeferredToolNames: deferredToolNames,
+		PlanContext:       req.PlanContext,
+	}
+}
+
+func (r *Runner) callModelWithEmergencyRetry(ctx context.Context, req RunRequest, messages []provider.ChatMessage, allowedTools []tool.Definition, deferredToolNames []string, iteration, maxIterations int, collector *StreamCollector, out chan<- provider.StreamEvent) (RoundResult, []provider.ChatMessage, error) {
+	emergencyRetried := false
+	for {
+		promptOptions := prompt.Options{}
+		if r.PromptContext != nil {
+			promptOptions.CustomInstructions = r.PromptContext.CustomInstructions(ctx)
+			promptOptions.LongTermMemory = r.PromptContext.LongTermMemory(ctx)
+			if skills, ok := r.PromptContext.(skillPromptContext); ok {
+				promptOptions.SkillsCatalog = skills.SkillsCatalog(ctx)
+				promptOptions.ActiveSkillText = skills.ActiveSkills(ctx)
+			}
+		}
+		model := r.Config.Model
+		if strings.TrimSpace(req.Model) != "" {
+			model = strings.TrimSpace(req.Model)
+		}
+		modelReq := provider.ChatRequest{
+			SystemPrompt: prompt.BuildSystemPrompt(promptOptions),
+			SystemNotes:  systemNoteMessages(r.dynamicContext(req, allowedTools, deferredToolNames, iteration)),
+			Messages:     append([]provider.ChatMessage(nil), messages...),
+			Model:        model,
+			Thinking:     r.Config.Thinking,
+			Tools:        allowedTools,
+		}
+		events, err := r.Provider.StreamChat(ctx, modelReq)
+		if err != nil {
+			if provider.IsPromptTooLong(err) && r.ContextManager != nil && !emergencyRetried {
+				managed, compactErr := r.ContextManager.EmergencyCompact(ctx, messages, allowedTools)
+				if compactErr != nil {
+					return RoundResult{}, messages, compactErr
+				}
+				messages = managed.Messages
+				out <- contextEvent(managed)
+				emergencyRetried = true
+				continue
+			}
+			out <- provider.StreamEvent{Type: provider.StreamEventTypeError, ErrorText: err.Error()}
+			return RoundResult{}, messages, err
+		}
+		round, err := collector.Collect(ctx, events, out)
+		if err != nil && provider.IsPromptTooLong(err) && r.ContextManager != nil && !emergencyRetried {
+			managed, compactErr := r.ContextManager.EmergencyCompact(ctx, messages, allowedTools)
+			if compactErr != nil {
+				return round, messages, compactErr
+			}
+			messages = managed.Messages
+			out <- contextEvent(managed)
+			emergencyRetried = true
+			out <- progressEvent("model_call", iteration, maxIterations, "retrying after context compaction")
+			continue
+		}
+		return round, messages, err
+	}
+}
+
+func contextEvent(result contextmgr.ManageResult) provider.StreamEvent {
+	message := "context managed"
+	if result.Compacted {
+		message = "context compacted"
+	} else if result.OffloadReport.Replaced > 0 {
+		message = "large tool results offloaded"
+	}
+	return provider.StreamEvent{
+		Type: provider.StreamEventTypeContext,
+		Context: &provider.ContextEvent{
+			Phase:               "summary",
+			Mode:                string(result.Mode),
+			Message:             message,
+			BeforeTokens:        result.Before.Tokens,
+			AfterTokens:         result.After.Tokens,
+			ReplacedToolResults: result.OffloadReport.Replaced,
+		},
+	}
+}
+
+func systemNoteMessages(ctx prompt.DynamicContext) []provider.ChatMessage {
+	notes := prompt.BuildSystemNotes(ctx, prompt.DefaultNotePolicy())
+	messages := make([]provider.ChatMessage, 0, len(notes))
+	for _, note := range notes {
+		messages = append(messages, provider.ChatMessage{
+			Role:    provider.RoleSystem,
+			Content: note.TaggedContent(),
+		})
+	}
+	return messages
+}
+
+func toolSummary(defs []tool.Definition) []string {
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		names = append(names, def.Name)
+	}
+	return names
+}
+
+func (r *Runner) options() Options {
+	options := r.Options
+	if options.MaxIterations <= 0 {
+		options.MaxIterations = 8
+	}
+	if options.MaxConsecutiveUnknown <= 0 {
+		options.MaxConsecutiveUnknown = 2
+	}
+	return options
+}
+
+func progressEvent(phase string, iteration, maxIteration int, message string) provider.StreamEvent {
+	return provider.StreamEvent{
+		Type: provider.StreamEventTypeProgress,
+		Progress: &provider.Progress{
+			Phase:        phase,
+			Iteration:    iteration,
+			MaxIteration: maxIteration,
+			Message:      message,
+		},
+	}
+}
